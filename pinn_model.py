@@ -7,7 +7,6 @@ class ElasticityPINN(nn.Module):
     def __init__(self, hidden_layers=[50, 50, 50, 50]):
         super().__init__()
         
-        # Network architecture
         layers = []
         input_dim = 3  # x, y, t
         
@@ -16,13 +15,11 @@ class ElasticityPINN(nn.Module):
             layers.append(nn.Tanh())
             input_dim = h_dim
             
-        layers.append(nn.Linear(input_dim, 2))  # Output: displacement (u, v)
+        layers.append(nn.Linear(input_dim, 2))
         
         self.network = nn.Sequential(*layers)
-        
-        # Material parameters as regular tensors
-        self.E = torch.tensor(210.0)
-        self.nu = torch.tensor(0.3)
+        self.E = nn.Parameter(torch.tensor(210.0, dtype=torch.float32))
+        self.nu = nn.Parameter(torch.tensor(0.3, dtype=torch.float32))
         
     def forward(self, x):
         return self.network(x)
@@ -36,11 +33,7 @@ class ElasticityPINN(nn.Module):
         v_x = torch.autograd.grad(v.sum(), x, create_graph=True)[0]
         v_y = torch.autograd.grad(v.sum(), y, create_graph=True)[0]
         
-        epsilon_xx = u_x
-        epsilon_yy = v_y
-        epsilon_xy = 0.5 * (u_y + v_x)
-        
-        return epsilon_xx, epsilon_yy, epsilon_xy
+        return u_x, v_y, 0.5 * (u_y + v_x)
     
     def compute_stress(self, epsilon_xx, epsilon_yy, epsilon_xy):
         lambda_ = self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
@@ -76,14 +69,17 @@ class CompositePINN(ElasticityPINN):
         super().__init__(hidden_layers)
         self.num_phases = num_phases
         
-        # Initialize phase properties as regular tensors
-        self.E_phases = torch.ones(num_phases) * 210.0
-        self.nu_phases = torch.ones(num_phases) * 0.3
+        self.E_phases = nn.Parameter(torch.ones(num_phases, dtype=torch.float32) * 210.0)
+        self.nu_phases = nn.Parameter(torch.ones(num_phases, dtype=torch.float32) * 0.3)
         
-    def update_phase_properties(self, E_values, nu_values):
-        """Update phase properties using regular tensors"""
-        self.E_phases = torch.tensor(E_values, dtype=torch.float32)
-        self.nu_phases = torch.tensor(nu_values, dtype=torch.float32)
+    def update_phase_properties(self, E_values, nu_values):  # THIS IS THE CORRECT METHOD NAME
+        """Update phase properties with proper tensor conversion"""
+        E_tensor = torch.tensor(E_values, dtype=torch.float32)
+        nu_tensor = torch.tensor(nu_values, dtype=torch.float32)
+        
+        with torch.no_grad():
+            self.E_phases.data.copy_(E_tensor)
+            self.nu_phases.data.copy_(nu_tensor)
         
     def compute_effective_properties(self, phase_fractions):
         """Compute effective material properties"""
@@ -94,25 +90,29 @@ class CompositePINN(ElasticityPINN):
     
     def forward(self, x, phase_fractions=None):
         if phase_fractions is None:
-            phase_fractions = torch.ones(self.num_phases) / self.num_phases
-        
-        # Convert phase_fractions to tensor if needed
-        if not isinstance(phase_fractions, torch.Tensor):
-            phase_fractions = torch.tensor(phase_fractions, dtype=torch.float32)
+            phase_fractions = torch.ones(self.num_phases, dtype=torch.float32) / self.num_phases
             
-        # Update effective properties
-        self.E, self.nu = self.compute_effective_properties(phase_fractions)
+        phase_fractions = torch.tensor(phase_fractions, dtype=torch.float32)
+        
+        with torch.no_grad():
+            E_eff, nu_eff = self.compute_effective_properties(phase_fractions)
+            self.E.data.copy_(E_eff)
+            self.nu.data.copy_(nu_eff)
         
         return super().forward(x)
 
 def train_model(model, dataloader, num_epochs=1000, learning_rate=1e-3):
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    losses = []
     
     for epoch in range(num_epochs):
         total_loss = 0
         
         for batch in dataloader:
             x, y, t = batch
+            x = x.float()
+            y = y.float()
+            t = t.float()
             
             loss = model.pde_loss(x, y, t)
             
@@ -122,7 +122,8 @@ def train_model(model, dataloader, num_epochs=1000, learning_rate=1e-3):
             
             total_loss += loss.item()
             
+        losses.append(total_loss)
         if (epoch + 1) % 100 == 0:
             print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {total_loss:.4f}')
     
-    return model
+    return model, losses
