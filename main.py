@@ -1,4 +1,5 @@
 # main.py
+# main.py
 import streamlit as st
 import torch
 import numpy as np
@@ -22,7 +23,7 @@ def predict_displacement(model, X, Y, T, phase_fractions):
     
     u = displacement[:, 0].reshape(X.shape)
     v = displacement[:, 1].reshape(Y.shape)
-    return u, v
+    return u.numpy(), v.numpy()
 
 def plot_displacement(X, Y, u, v, title):
     magnitude = np.sqrt(u**2 + v**2)
@@ -47,11 +48,8 @@ def plot_displacement(X, Y, u, v, title):
 
 def initialize_session_state():
     if 'model' not in st.session_state:
-        st.session_state['model'] = CompositePINN(num_phases=2)
-    if 'E_values' not in st.session_state:
-        st.session_state['E_values'] = [210.0, 210.0]
-    if 'nu_values' not in st.session_state:
-        st.session_state['nu_values'] = [0.3, 0.3]
+        st.session_state.model = CompositePINN(num_phases=2)
+        st.session_state.model_initialized = True
 
 def main():
     st.set_page_config(
@@ -70,10 +68,8 @@ def main():
         <hr>
         """, unsafe_allow_html=True)
     
-    # Initialize session state
     initialize_session_state()
     
-    # Sidebar for parameters
     st.sidebar.header("Material Parameters")
     
     num_phases = st.sidebar.number_input("Number of Phases", min_value=1, max_value=5, value=2)
@@ -86,7 +82,7 @@ def main():
         st.sidebar.subheader(f"Phase {i+1}")
         fraction = st.sidebar.slider(f"Volume Fraction {i+1}", 0.0, 1.0, 1.0/num_phases)
         E = st.sidebar.number_input(f"Young's Modulus {i+1} (GPa)", value=210.0)
-        nu = st.sidebar.number_input(f"Poisson's Ratio {i+1}", value=0.3)
+        nu = st.sidebar.number_input(f"Poisson's Ratio {i+1}", value=0.3, min_value=0.0, max_value=0.5)
         
         phase_fractions.append(fraction)
         E_values.append(E)
@@ -102,23 +98,35 @@ def main():
     
     # Update model properties
     try:
-        st.session_state.model.update_phase_properties(E_values, nu_values)
+        st.session_state.model.set_phase_properties(E_values, nu_values)
     except Exception as e:
         st.error(f"Error updating properties: {str(e)}")
+        return
+    
+    # Training parameters
+    st.sidebar.header("Training Parameters")
+    num_epochs = st.sidebar.number_input("Number of Epochs", min_value=100, max_value=5000, value=1000, step=100)
+    learning_rate = st.sidebar.number_input("Learning Rate", min_value=1e-5, max_value=1e-1, value=1e-3, format="%.5f")
     
     # Training button
     if st.sidebar.button("Train Model"):
         with st.spinner("Training model..."):
-            X, Y, T = create_mesh()
-            dataloader = [(torch.tensor(X.flatten(), dtype=torch.float32), 
-                          torch.tensor(Y.flatten(), dtype=torch.float32), 
-                          torch.tensor(T.flatten(), dtype=torch.float32))]
-            
             try:
-                st.session_state.model = train_model(st.session_state.model, dataloader)
+                X, Y, T = create_mesh()
+                dataloader = [(torch.tensor(X.flatten(), dtype=torch.float32),
+                             torch.tensor(Y.flatten(), dtype=torch.float32),
+                             torch.tensor(T.flatten(), dtype=torch.float32))]
+                
+                model, losses = train_model(st.session_state.model, dataloader, 
+                                         num_epochs=num_epochs, learning_rate=learning_rate)
+                st.session_state.model = model
+                
+                # Plot training loss
+                st.line_chart(losses)
                 st.success("Model trained successfully!")
             except Exception as e:
                 st.error(f"Training error: {str(e)}")
+                return
     
     # Analysis section
     st.header("Analysis")
@@ -163,6 +171,7 @@ def main():
                 file_name="composite_analysis_results.json",
                 mime="application/json"
             )
+            
     except Exception as e:
         st.error(f"Analysis error: {str(e)}")
 
