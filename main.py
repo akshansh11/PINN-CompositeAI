@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import torch
 import numpy as np
@@ -48,7 +49,21 @@ def plot_displacement(X, Y, u, v, title):
     return fig
 
 def main():
-    st.title("Composite Materials Analysis using Physics-Informed Neural Networks")
+    st.set_page_config(
+        page_title="CompositeAI Analyzer",
+        page_icon="🔬",
+        layout="wide"
+    )
+
+    st.markdown("""
+        <h1 style='text-align: center; color: #2E4053;'>
+            CompositeAI Analyzer
+        </h1>
+        <h3 style='text-align: center; color: #566573;'>
+            Physics-Informed Neural Networks for Multiscale Material Modeling
+        </h3>
+        <hr>
+        """, unsafe_allow_html=True)
     
     # Sidebar for parameters
     st.sidebar.header("Material Parameters")
@@ -56,7 +71,8 @@ def main():
     num_phases = st.sidebar.number_input("Number of Phases", min_value=1, max_value=5, value=2)
     
     phase_fractions = []
-    phase_properties = []
+    E_values = []
+    nu_values = []
     
     for i in range(num_phases):
         st.sidebar.subheader(f"Phase {i+1}")
@@ -65,7 +81,8 @@ def main():
         nu = st.sidebar.number_input(f"Poisson's Ratio {i+1}", value=0.3)
         
         phase_fractions.append(fraction)
-        phase_properties.append((E, nu))
+        E_values.append(E)
+        nu_values.append(nu)
     
     # Normalize phase fractions
     phase_fractions = torch.tensor(phase_fractions)
@@ -81,6 +98,9 @@ def main():
         model = CompositePINN(hidden_layers=hidden_layers, num_phases=num_phases)
         st.session_state.model = model
     
+    # Update model properties
+    st.session_state.model.update_phase_properties(E_values, nu_values)
+    
     # Training button
     if st.sidebar.button("Train Model"):
         with st.spinner("Training model..."):
@@ -88,7 +108,6 @@ def main():
             points = torch.tensor(np.stack([X.flatten(), Y.flatten(), T.flatten()], axis=1),
                                 dtype=torch.float32)
             
-            # Create a simple dataloader for training
             dataloader = [(torch.tensor(X.flatten()), 
                           torch.tensor(Y.flatten()), 
                           torch.tensor(T.flatten()))]
@@ -100,13 +119,9 @@ def main():
     # Analysis section
     st.header("Analysis")
     
-    # Create mesh for visualization
     X, Y, T = create_mesh()
-    
-    # Predict displacement
     u, v = predict_displacement(st.session_state.model, X, Y, T, phase_fractions)
     
-    # Plot results
     st.subheader("Displacement Field")
     fig = plot_displacement(X, Y, u, v, "Displacement Magnitude")
     st.plotly_chart(fig)
@@ -123,7 +138,6 @@ def main():
     
     # Export results
     if st.button("Export Results"):
-        # Create results dictionary
         results = {
             "Effective_Properties": {
                 "Young's_Modulus": E_eff.item(),
@@ -134,7 +148,7 @@ def main():
                     "Volume_Fraction": f.item(),
                     "Young's_Modulus": E,
                     "Poisson's_Ratio": nu
-                }} for i, (f, (E, nu)) in enumerate(zip(phase_fractions, phase_properties))
+                }} for i, (f, E, nu) in enumerate(zip(phase_fractions, E_values, nu_values))
             ]
         }
         
