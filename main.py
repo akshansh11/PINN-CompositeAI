@@ -1,4 +1,4 @@
-# app.py
+# main.py
 import streamlit as st
 import torch
 import numpy as np
@@ -6,7 +6,6 @@ import plotly.graph_objects as go
 from pinn_model import CompositePINN
 
 def create_mesh(nx=50, ny=50, nt=1):
-    """Create a mesh for visualization"""
     x = np.linspace(0, 1, nx)
     y = np.linspace(0, 1, ny)
     t = np.linspace(0, 1, nt)
@@ -15,7 +14,6 @@ def create_mesh(nx=50, ny=50, nt=1):
     return X, Y, T
 
 def predict_displacement(model, X, Y, T, phase_fractions):
-    """Predict displacement using the trained model"""
     points = torch.tensor(np.stack([X.flatten(), Y.flatten(), T.flatten()], axis=1),
                          dtype=torch.float32)
     
@@ -27,7 +25,6 @@ def predict_displacement(model, X, Y, T, phase_fractions):
     return u, v
 
 def plot_displacement(X, Y, u, v, title):
-    """Create displacement plot using plotly"""
     magnitude = np.sqrt(u**2 + v**2)
     
     fig = go.Figure(data=go.Heatmap(
@@ -48,6 +45,14 @@ def plot_displacement(X, Y, u, v, title):
     
     return fig
 
+def initialize_session_state():
+    if 'model' not in st.session_state:
+        st.session_state['model'] = CompositePINN(num_phases=2)
+    if 'E_values' not in st.session_state:
+        st.session_state['E_values'] = [210.0, 210.0]
+    if 'nu_values' not in st.session_state:
+        st.session_state['nu_values'] = [0.3, 0.3]
+
 def main():
     st.set_page_config(
         page_title="CompositeAI Analyzer",
@@ -64,6 +69,9 @@ def main():
         </h3>
         <hr>
         """, unsafe_allow_html=True)
+    
+    # Initialize session state
+    initialize_session_state()
     
     # Sidebar for parameters
     st.sidebar.header("Material Parameters")
@@ -85,79 +93,78 @@ def main():
         nu_values.append(nu)
     
     # Normalize phase fractions
-    phase_fractions = torch.tensor(phase_fractions)
+    phase_fractions = np.array(phase_fractions)
     phase_fractions = phase_fractions / phase_fractions.sum()
     
-    # Model parameters
-    st.sidebar.header("Model Parameters")
-    hidden_layers = st.sidebar.text_input("Hidden Layers", "50,50,50,50")
-    hidden_layers = [int(x) for x in hidden_layers.split(",")]
-    
-    # Create or load model
-    if 'model' not in st.session_state:
-        model = CompositePINN(hidden_layers=hidden_layers, num_phases=num_phases)
-        st.session_state.model = model
+    # Update model if number of phases changed
+    if num_phases != st.session_state.model.num_phases:
+        st.session_state.model = CompositePINN(num_phases=num_phases)
     
     # Update model properties
-    st.session_state.model.update_phase_properties(E_values, nu_values)
+    try:
+        st.session_state.model.update_phase_properties(E_values, nu_values)
+    except Exception as e:
+        st.error(f"Error updating properties: {str(e)}")
     
     # Training button
     if st.sidebar.button("Train Model"):
         with st.spinner("Training model..."):
             X, Y, T = create_mesh()
-            points = torch.tensor(np.stack([X.flatten(), Y.flatten(), T.flatten()], axis=1),
-                                dtype=torch.float32)
+            dataloader = [(torch.tensor(X.flatten(), dtype=torch.float32), 
+                          torch.tensor(Y.flatten(), dtype=torch.float32), 
+                          torch.tensor(T.flatten(), dtype=torch.float32))]
             
-            dataloader = [(torch.tensor(X.flatten()), 
-                          torch.tensor(Y.flatten()), 
-                          torch.tensor(T.flatten()))]
-            
-            model = train_model(st.session_state.model, dataloader)
-            st.session_state.model = model
-            st.success("Model trained successfully!")
+            try:
+                st.session_state.model = train_model(st.session_state.model, dataloader)
+                st.success("Model trained successfully!")
+            except Exception as e:
+                st.error(f"Training error: {str(e)}")
     
     # Analysis section
     st.header("Analysis")
     
-    X, Y, T = create_mesh()
-    u, v = predict_displacement(st.session_state.model, X, Y, T, phase_fractions)
-    
-    st.subheader("Displacement Field")
-    fig = plot_displacement(X, Y, u, v, "Displacement Magnitude")
-    st.plotly_chart(fig)
-    
-    # Display effective properties
-    st.subheader("Effective Properties")
-    E_eff, nu_eff = st.session_state.model.compute_effective_properties(phase_fractions)
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Effective Young's Modulus (GPa)", f"{E_eff.item():.2f}")
-    with col2:
-        st.metric("Effective Poisson's Ratio", f"{nu_eff.item():.3f}")
-    
-    # Export results
-    if st.button("Export Results"):
-        results = {
-            "Effective_Properties": {
-                "Young's_Modulus": E_eff.item(),
-                "Poisson's_Ratio": nu_eff.item()
-            },
-            "Phase_Properties": [
-                {f"Phase_{i+1}": {
-                    "Volume_Fraction": f.item(),
-                    "Young's_Modulus": E,
-                    "Poisson's_Ratio": nu
-                }} for i, (f, E, nu) in enumerate(zip(phase_fractions, E_values, nu_values))
-            ]
-        }
+    try:
+        X, Y, T = create_mesh()
+        u, v = predict_displacement(st.session_state.model, X, Y, T, phase_fractions)
         
-        st.download_button(
-            "Download Results",
-            data=str(results),
-            file_name="composite_analysis_results.json",
-            mime="application/json"
-        )
+        st.subheader("Displacement Field")
+        fig = plot_displacement(X, Y, u, v, "Displacement Magnitude")
+        st.plotly_chart(fig)
+        
+        # Display effective properties
+        st.subheader("Effective Properties")
+        E_eff, nu_eff = st.session_state.model.compute_effective_properties(phase_fractions)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Effective Young's Modulus (GPa)", f"{E_eff.item():.2f}")
+        with col2:
+            st.metric("Effective Poisson's Ratio", f"{nu_eff.item():.3f}")
+        
+        # Export results
+        if st.button("Export Results"):
+            results = {
+                "Effective_Properties": {
+                    "Young's_Modulus": E_eff.item(),
+                    "Poisson's_Ratio": nu_eff.item()
+                },
+                "Phase_Properties": [
+                    {f"Phase_{i+1}": {
+                        "Volume_Fraction": f,
+                        "Young's_Modulus": E,
+                        "Poisson's_Ratio": nu
+                    }} for i, (f, E, nu) in enumerate(zip(phase_fractions, E_values, nu_values))
+                ]
+            }
+            
+            st.download_button(
+                "Download Results",
+                data=str(results),
+                file_name="composite_analysis_results.json",
+                mime="application/json"
+            )
+    except Exception as e:
+        st.error(f"Analysis error: {str(e)}")
 
 if __name__ == "__main__":
     main()
