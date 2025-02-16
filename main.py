@@ -1,5 +1,3 @@
-# main.py
-# main.py
 import streamlit as st
 import torch
 import numpy as np
@@ -10,9 +8,7 @@ def create_mesh(nx=50, ny=50, nt=1):
     x = np.linspace(0, 1, nx)
     y = np.linspace(0, 1, ny)
     t = np.linspace(0, 1, nt)
-    
-    X, Y, T = np.meshgrid(x, y, t)
-    return X, Y, T
+    return np.meshgrid(x, y, t)
 
 def predict_displacement(model, X, Y, T, phase_fractions):
     points = torch.tensor(np.stack([X.flatten(), Y.flatten(), T.flatten()], axis=1),
@@ -96,9 +92,9 @@ def main():
     if num_phases != st.session_state.model.num_phases:
         st.session_state.model = CompositePINN(num_phases=num_phases)
     
-    # Update model properties
+    # Update model properties using the correct method name
     try:
-        st.session_state.model.set_phase_properties(E_values, nu_values)
+        st.session_state.model.update_phase_properties(E_values, nu_values)  # CORRECT METHOD NAME
     except Exception as e:
         st.error(f"Error updating properties: {str(e)}")
         return
@@ -108,7 +104,6 @@ def main():
     num_epochs = st.sidebar.number_input("Number of Epochs", min_value=100, max_value=5000, value=1000, step=100)
     learning_rate = st.sidebar.number_input("Learning Rate", min_value=1e-5, max_value=1e-1, value=1e-3, format="%.5f")
     
-    # Training button
     if st.sidebar.button("Train Model"):
         with st.spinner("Training model..."):
             try:
@@ -121,14 +116,12 @@ def main():
                                          num_epochs=num_epochs, learning_rate=learning_rate)
                 st.session_state.model = model
                 
-                # Plot training loss
                 st.line_chart(losses)
                 st.success("Model trained successfully!")
             except Exception as e:
                 st.error(f"Training error: {str(e)}")
                 return
     
-    # Analysis section
     st.header("Analysis")
     
     try:
@@ -139,7 +132,6 @@ def main():
         fig = plot_displacement(X, Y, u, v, "Displacement Magnitude")
         st.plotly_chart(fig)
         
-        # Display effective properties
         st.subheader("Effective Properties")
         E_eff, nu_eff = st.session_state.model.compute_effective_properties(phase_fractions)
         
@@ -149,7 +141,6 @@ def main():
         with col2:
             st.metric("Effective Poisson's Ratio", f"{nu_eff.item():.3f}")
         
-        # Export results
         if st.button("Export Results"):
             results = {
                 "Effective_Properties": {
